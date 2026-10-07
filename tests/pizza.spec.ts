@@ -12,22 +12,51 @@ async function basicInit(page: Page) {
       password: "a",
       roles: [{ role: Role.Diner }],
     },
+    "a@jwt.com": {
+      id: "1",
+      name: "Admin User",
+      email: "a@jwt.com",
+      password: "admin",
+      roles: [{ role: Role.Admin }],
+    },
+    "f@jwt.com": {
+      id: "8",
+      name: "Fran Chise",
+      email: "f@jwt.com",
+      password: "franchisee",
+      roles: [{ role: Role.Franchisee, objectId: "2" }],
+    },
   };
 
   await page.route("*/**/api/auth", async (route) => {
-    const loginReq = route.request().postDataJSON();
-    const user = validUsers[loginReq.email];
-    if (!user || user.password !== loginReq.password) {
+    const method = route.request().method();
+    if (method === "DELETE") {
+      loggedInUser = undefined;
+      await route.fulfill({ json: {} });
+      return;
+    }
+    const authReq = route.request().postDataJSON();
+    if (method === "POST") {
+      const newUser: User = {
+        id: "9",
+        name: authReq.name,
+        email: authReq.email,
+        password: authReq.password,
+        roles: [{ role: Role.Diner }],
+      };
+      validUsers[newUser.email!] = newUser;
+      loggedInUser = newUser;
+      await route.fulfill({ json: { user: newUser, token: "abcdef" } });
+      return;
+    }
+    const user = validUsers[authReq.email];
+    if (!user || user.password !== authReq.password) {
       await route.fulfill({ status: 401, json: { error: "Unauthorized" } });
       return;
     }
-    loggedInUser = validUsers[loginReq.email];
-    const loginRes = {
-      user: loggedInUser,
-      token: "abcdef",
-    };
-    expect(route.request().method()).toBe("PUT");
-    await route.fulfill({ json: loginRes });
+    loggedInUser = validUsers[authReq.email];
+    expect(method).toBe("PUT");
+    await route.fulfill({ json: { user: loggedInUser, token: "abcdef" } });
   });
 
   await page.route("*/**/api/user/me", async (route) => {
@@ -56,29 +85,70 @@ async function basicInit(page: Page) {
     await route.fulfill({ json: menuRes });
   });
 
-  await page.route(/\/api\/franchise(\?.*)?$/, async (route) => {
-    const franchiseRes = {
-      franchises: [
-        {
-          id: "2",
-          name: "LotaPizza",
-          stores: [
-            { id: "4", name: "Lehi" },
-            { id: "5", name: "Springville" },
-            { id: "6", name: "American Fork" },
-          ],
-        },
-        {
-          id: "3",
-          name: "PizzaCorp",
-          stores: [{ id: "7", name: "Spanish Fork" }],
-        },
-        { id: "4", name: "topSpot", stores: [] },
+  const franchises = [
+    {
+      id: "2",
+      name: "LotaPizza",
+      stores: [
+        { id: "4", name: "Lehi" },
+        { id: "5", name: "Springville" },
+        { id: "6", name: "American Fork" },
       ],
-      more: false,
-    };
+    },
+    {
+      id: "3",
+      name: "PizzaCorp",
+      stores: [{ id: "7", name: "Spanish Fork" }],
+    },
+    { id: "4", name: "topSpot", stores: [] },
+  ];
+
+  await page.route(/\/api\/franchise(\?.*)?$/, async (route) => {
+    if (route.request().method() === "POST") {
+      const franchiseReq = route.request().postDataJSON();
+      const franchiseRes = { ...franchiseReq, id: "5", stores: [] };
+      franchises.push(franchiseRes);
+      await route.fulfill({ json: franchiseRes });
+      return;
+    }
     expect(route.request().method()).toBe("GET");
-    await route.fulfill({ json: franchiseRes });
+    await route.fulfill({ json: { franchises, more: false } });
+  });
+
+  await page.route(/\/api\/franchise\/[^/]+$/, async (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").pop();
+    if (route.request().method() === "DELETE") {
+      const index = franchises.findIndex((franchise) => franchise.id === id);
+      if (index >= 0) franchises.splice(index, 1);
+      await route.fulfill({ json: {} });
+      return;
+    }
+    expect(route.request().method()).toBe("GET");
+    await route.fulfill({ json: id === "8" ? [franchises[0]] : [] });
+  });
+
+  await page.route(/\/api\/franchise\/[^/]+\/store$/, async (route) => {
+    expect(route.request().method()).toBe("POST");
+    const franchiseId = new URL(route.request().url()).pathname.split("/")[3];
+    const storeReq = route.request().postDataJSON();
+    const storeRes = { ...storeReq, id: "8" };
+    const franchise = franchises.find((item) => item.id === franchiseId);
+    if (franchise) franchise.stores.push(storeRes);
+    await route.fulfill({ json: storeRes });
+  });
+
+  await page.route(/\/api\/franchise\/[^/]+\/store\/[^/]+$/, async (route) => {
+    expect(route.request().method()).toBe("DELETE");
+    const parts = new URL(route.request().url()).pathname.split("/");
+    const franchiseId = parts.at(-3);
+    const storeId = parts.at(-1);
+    const franchise = franchises.find((item) => item.id === franchiseId);
+    if (franchise) {
+      franchise.stores = franchise.stores.filter(
+        (store) => store.id !== storeId,
+      );
+    }
+    await route.fulfill({ json: {} });
   });
 
   await page.route("*/**/api/order", async (route) => {
@@ -135,4 +205,122 @@ test("purchase with login", async ({ page }) => {
   await page.getByRole("button", { name: "Pay now" }).click();
 
   await expect(page.getByText("0.008")).toBeVisible();
+});
+
+test("create franchise", async ({ page }) => {
+  await basicInit(page);
+
+  await page.getByRole("link", { name: "Login" }).click();
+  await page.getByPlaceholder("Email address").fill("a@jwt.com");
+  await page.getByPlaceholder("Password").fill("admin");
+  await page.getByRole("button", { name: "Login" }).click();
+
+  await expect(page.getByRole("link", { name: "AU" })).toBeVisible();
+
+  await page.getByRole("link", { name: "Admin", exact: true }).click();
+  await page.getByRole("button", { name: "Add Franchise" }).click();
+  await page.getByPlaceholder("franchise name").fill("newest");
+  await page.getByPlaceholder("franchisee admin email").fill("a@jwt.com");
+  await page.getByRole("button", { name: "Create" }).click();
+
+  await expect(page.getByRole("main")).toContainText("newest");
+});
+
+test("close franchise", async ({ page }) => {
+  await basicInit(page);
+
+  await page.getByRole("link", { name: "Login" }).click();
+  await page.getByPlaceholder("Email address").fill("a@jwt.com");
+  await page.getByPlaceholder("Password").fill("admin");
+  await page.getByRole("button", { name: "Login" }).click();
+
+  await expect(page.getByRole("link", { name: "AU" })).toBeVisible();
+
+  await page.getByRole("link", { name: "Admin", exact: true }).click();
+  await page.getByRole("row", { name: "topSpot" }).getByRole("button").click();
+  await expect(page.getByRole("main")).toContainText("topSpot");
+  await page.getByRole("button", { name: "Close" }).click();
+
+  await expect(page.getByRole("main")).toContainText("LotaPizza");
+  await expect(page.getByText("topSpot")).toHaveCount(0);
+});
+
+test("close store", async ({ page }) => {
+  await basicInit(page);
+
+  await page.getByRole("link", { name: "Login" }).click();
+  await page.getByPlaceholder("Email address").fill("f@jwt.com");
+  await page.getByPlaceholder("Password").fill("franchisee");
+  await page.getByRole("button", { name: "Login" }).click();
+
+  await expect(page.getByRole("link", { name: "FC" })).toBeVisible();
+
+  await page
+    .getByRole("navigation", { name: "Global" })
+    .getByRole("link", { name: "Franchise" })
+    .click();
+  await page.getByRole("row", { name: "Lehi" }).getByRole("button").click();
+  await expect(page.getByRole("main")).toContainText("Lehi");
+  await page.getByRole("button", { name: "Close" }).click();
+
+  await expect(page.getByRole("main")).toContainText("Springville");
+  await expect(page.getByText("Lehi")).toHaveCount(0);
+});
+
+test("create store", async ({ page }) => {
+  await basicInit(page);
+
+  await page.getByRole("link", { name: "Login" }).click();
+  await page.getByPlaceholder("Email address").fill("f@jwt.com");
+  await page.getByPlaceholder("Password").fill("franchisee");
+  await page.getByRole("button", { name: "Login" }).click();
+
+  await expect(page.getByRole("link", { name: "FC" })).toBeVisible();
+
+  await page
+    .getByRole("navigation", { name: "Global" })
+    .getByRole("link", { name: "Franchise" })
+    .click();
+  await page.getByRole("button", { name: "Create store" }).click();
+  await page.getByPlaceholder("store name").fill("new store");
+  await page.getByRole("button", { name: "Create" }).click();
+
+  await expect(page.getByRole("main")).toContainText("new store");
+});
+
+test("logout", async ({ page }) => {
+  await basicInit(page);
+
+  await page.getByRole("link", { name: "Login" }).click();
+  await page.getByPlaceholder("Email address").fill("f@jwt.com");
+  await page.getByPlaceholder("Password").fill("franchisee");
+  await page.getByRole("button", { name: "Login" }).click();
+
+  await expect(page.getByRole("link", { name: "FC" })).toBeVisible();
+
+  await page.getByRole("link", { name: "Logout" }).click();
+
+  await expect(page.getByRole("link", { name: "Login" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "FC" })).toHaveCount(0);
+});
+
+test("about page", async ({ page }) => {
+  await basicInit(page);
+
+  await page.getByRole("link", { name: "About" }).click();
+
+  await expect(page.getByRole("heading", { name: "The secret sauce" })).toBeVisible();
+  await expect(page.getByRole("main")).toContainText("Our employees");
+});
+
+test("register", async ({ page }) => {
+  await basicInit(page);
+
+  await page.getByRole("link", { name: "Register" }).click();
+  await page.getByPlaceholder("Full name").fill("Test User");
+  await page.getByPlaceholder("Email address").fill("t@jwt.com");
+  await page.getByPlaceholder("Password").fill("test");
+  await page.getByRole("button", { name: "Register" }).click();
+
+  await expect(page.getByRole("link", { name: "TU" })).toBeVisible();
 });
