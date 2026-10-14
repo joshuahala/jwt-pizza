@@ -5,6 +5,7 @@ import {
   Store,
   OrderHistory,
   User,
+  UserList,
   Menu,
   Order,
   Endpoints,
@@ -93,6 +94,20 @@ class HttpPizzaService implements PizzaService {
     return Promise.resolve(result);
   }
 
+  async getUsers(
+    page: number = 0,
+    limit: number = 10,
+    nameFilter: string = "*",
+  ): Promise<UserList> {
+    const result = await this.callEndpoint(
+      `/api/user?page=${page}&limit=${limit}&name=${encodeURIComponent(nameFilter)}`,
+    );
+    return {
+      users: result.users ?? [],
+      more: !!result.more,
+    };
+  }
+
   async updateUser(updatedUser: User): Promise<User> {
     const { user, token } = await this.callEndpoint(
       `/api/user/${updatedUser.id}`,
@@ -101,6 +116,10 @@ class HttpPizzaService implements PizzaService {
     );
     localStorage.setItem("token", token);
     return Promise.resolve(user);
+  }
+
+  async deleteUser(user: User): Promise<void> {
+    return this.callEndpoint(`/api/user/${user.id}`, "DELETE");
   }
 
   async getMenu(): Promise<Menu> {

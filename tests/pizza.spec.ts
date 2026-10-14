@@ -59,9 +59,28 @@ async function basicInit(page: Page) {
     await route.fulfill({ json: { user: loggedInUser, token: "abcdef" } });
   });
 
-  await page.route("*/**/api/user/me", async (route) => {
-    expect(route.request().method()).toBe("GET");
-    await route.fulfill({ json: loggedInUser });
+  const users: User[] = Object.values(validUsers);
+
+  await page.route(/\/api\/user(\/[^/?]+)?(\?.*)?$/, async (route) => {
+    const method = route.request().method();
+    const pathname = new URL(route.request().url()).pathname;
+
+    if (pathname.endsWith("/me")) {
+      expect(method).toBe("GET");
+      await route.fulfill({ json: loggedInUser });
+      return;
+    }
+
+    if (method === "GET") {
+      await route.fulfill({ json: { users, more: false } });
+      return;
+    }
+
+    expect(method).toBe("DELETE");
+    const id = pathname.split("/").pop();
+    const index = users.findIndex((user) => user.id === id);
+    if (index >= 0) users.splice(index, 1);
+    await route.fulfill({ json: {} });
   });
 
   await page.route("*/**/api/order/menu", async (route) => {
@@ -205,6 +224,24 @@ test("purchase with login", async ({ page }) => {
   await page.getByRole("button", { name: "Pay now" }).click();
 
   await expect(page.getByText("0.008")).toBeVisible();
+});
+
+test("list users", async ({ page }) => {
+  await basicInit(page);
+
+  await page.getByRole("link", { name: "Login" }).click();
+  await page.getByPlaceholder("Email address").fill("a@jwt.com");
+  await page.getByPlaceholder("Password").fill("admin");
+  await page.getByRole("button", { name: "Login" }).click();
+
+  await expect(page.getByRole("link", { name: "AU" })).toBeVisible();
+
+  await page.getByRole("link", { name: "Admin", exact: true }).click();
+  await expect(page.getByRole("main")).toContainText("Users");
+  await expect(page.getByRole("main")).toContainText("Kai Chen");
+  await expect(page.getByRole("main")).toContainText("d@jwt.com");
+  await expect(page.getByRole("main")).toContainText("Admin User");
+  await expect(page.getByRole("main")).toContainText("Fran Chise");
 });
 
 test("create franchise", async ({ page }) => {
