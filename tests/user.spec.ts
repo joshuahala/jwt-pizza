@@ -1,7 +1,8 @@
-import { test, expect } from "playwright-test-coverage";
+import { test, expect } from "./testSetup";
+import { basicInit } from "./basicInit";
 
 async function registerDiner(page, name: string, email: string, password: string) {
-  await page.goto("/");
+  await basicInit(page);
   await page.getByRole("link", { name: "Register" }).click();
   await page.getByRole("textbox", { name: "Full name" }).fill(name);
   await page.getByRole("textbox", { name: "Email address" }).fill(email);
