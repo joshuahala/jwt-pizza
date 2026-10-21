@@ -33,12 +33,13 @@ jobs:
       - name: Build
         run: |
           npm ci && npm run build
-          cp dist/index.html dist/404.html
 
-      - name: Update pages artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Update dist artifact
+        uses: actions/upload-artifact@v7.0.2
         with:
+          name: package
           path: dist/
+
       - name: Run tests
         run: |
           npx playwright install --with-deps chromium
@@ -49,7 +50,12 @@ jobs:
           color=$(echo "$coverage < 80" | bc | awk '{if ($1) print "red"; else print "green"}')
           curl -s -X POST "https://pizza-factory.cs329.click/api/badge/${{ secrets.NET_ID }}/jwtpizzacoverage?label=Coverage&value=$coverage%25&color=$color" -H "authorization: bearer ${{ secrets.FACTORY_API_KEY }}"
   deploy:
+    needs: build
+    permissions:
+      id-token: write
     runs-on: ubuntu-latest
+    env:
+      version: ${{needs.build.outputs.version}}
     steps:
       - name: Create OIDC token to AWS
         uses: aws-actions/configure-aws-credentials@v6.3.0
@@ -57,9 +63,15 @@ jobs:
           audience: sts.amazonaws.com
           aws-region: us-east-1
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT }}:role/${{ secrets.CI_IAM_ROLE }}
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8.0.2
+        with:
+          name: package
+          path: dist/
+
       - name: Push to AWS S3
         run: |
-          mkdir dist
-          printf "<h1>CloudFront deployment with GitHub Actions</h1>" > dist/index.html
+          echo Deploying $version
           aws s3 cp dist s3://${{ secrets.APP_BUCKET }} --recursive
           aws cloudfront create-invalidation --distribution-id ${{ secrets.DISTRIBUTION_ID }} --paths "/*"
